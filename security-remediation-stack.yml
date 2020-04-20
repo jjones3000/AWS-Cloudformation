@@ -1,0 +1,156 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Creates a stack with a security remediation lambda script (and role) that disables access for users who have not logged in or used their accounts for 90 days or more. It creates a special role to deny users codecommit access via https git credentials.
+Parameters:
+    Environment:
+        Type: String
+        Default: dev
+        AllowedValues:
+            - dev
+            - test
+            - qa
+    LambdaRate:
+      Description: >
+        The rate (frequency) that determines when CloudWatch Events runs the rule that
+        triggers the Lambda function.
+      Default: rate(1440 minutes)
+      AllowedValues:
+        - rate(1 minute)
+        - rate(10 minutes)
+        - rate(1440 minutes)
+      Type: String
+      
+Mappings:
+  OperateBucketName: 
+    dev: 
+      bucket: 3000-jdj-operate-dev
+    test: 
+      bucket: 3000-jdj-operate-test
+    qa:
+      bucket: 3000-jdj-operate-qa
+Resources:              
+  SecurityRemediationLambda: 
+    Type: AWS::Lambda::Function
+    Properties: 
+       Description: Disables IAM user accounts that have been inactive for ninety days or more 
+       Code: 
+         S3Bucket: !FindInMap [ OperateBucketName, !Ref Environment, bucket ]
+         S3Key: 'lambda-fxn-code-file-name.zip'
+       FunctionName: !Sub ${Environment}-sec-iam-security-remediation
+       Handler: !Sub ${Environment}-sec-iam-security-remediation.lambda_handler
+       MemorySize: 1024
+       Timeout: 300
+       Role: !GetAtt LambdaSecRemRole.Arn 
+       Runtime: python3.7
+       Tags:  
+         - 
+           Key: "purpose"
+           Value: "iam-user-security-remediation"
+         - 
+           Key: "role"
+           Value: "secops-team"
+         - 
+           Key: "owner"
+           Value: "jeff-jones"
+         -
+           Key: "environment"
+           Value: !Sub ${Environment}
+    
+  LambdaSecRemRole: 
+    Type: AWS::IAM::Role
+    Properties: 
+      Description: Role for Lambda Execution
+      RoleName: !Sub '${Environment}-sec-r-iam-security-remediation'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - iam.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+        - arn:aws:iam::aws:policy/IAMReadOnlyAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonSESFullAccess
+
+  CodeCommitDenyGrp:
+    Type: AWS::IAM::Group
+    Properties: 
+      GroupName: CodeCommitDenyGrp
+
+  
+  AWSSecurityRemediationLambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${Environment}-sec-p-dny-codecommit'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - 
+            Effect: Deny
+            Action:
+              -  codecommit:CreateBranch
+              -  codecommit:TagResource
+              -  codecommit:DeleteCommentContent
+              -  codecommit:UpdateApprovalRuleTemplateName
+              -  codecommit:BatchAssociateApprovalRuleTemplateWithRepositories
+              -  codecommit:CreateRepository
+              -  codecommit:UpdatePullRequestApprovalRuleContent
+              -  codecommit:PutFile
+              -  codecommit:CreateCommit
+              -  codecommit:UpdatePullRequestTitle
+              -  codecommit:DeletePullRequestApprovalRule
+              -  codecommit:OverridePullRequestApprovalRules
+              -  codecommit:UpdateComment
+              -  codecommit:MergePullRequestByThreeWay
+              -  codecommit:UpdateRepositoryDescription
+              -  codecommit:CreateApprovalRuleTemplate
+              -  codecommit:TestRepositoryTriggers
+              -  codecommit:UpdatePullRequestStatus
+              -  codecommit:CreatePullRequest
+              -  codecommit:CreatePullRequestApprovalRule
+              -  codecommit:UpdateDefaultBranch
+              -  codecommit:UpdatePullRequestApprovalState
+              -  codecommit:PutRepositoryTriggers
+              -  codecommit:UploadArchive
+              -  codecommit:MergeBranchesBySquash
+              -  codecommit:PostCommentForPullRequest
+              -  codecommit:UpdatePullRequestDescription
+              -  codecommit:DeleteRepository
+              -  codecommit:BatchDisassociateApprovalRuleTemplateFromRepositories
+              -  codecommit:UntagResource
+              -  codecommit:DeleteApprovalRuleTemplate
+              -  codecommit:UpdateApprovalRuleTemplateContent
+              -  codecommit:PostCommentReply
+              -  codecommit:MergeBranchesByFastForward
+              -  codecommit:CreateUnreferencedMergeCommit
+              -  codecommit:MergePullRequestBySquash
+              -  codecommit:UpdateRepositoryName
+              -  codecommit:MergeBranchesByThreeWay
+              -  codecommit:DisassociateApprovalRuleTemplateFromRepository
+              -  codecommit:MergePullRequestByFastForward
+              -  codecommit:PostCommentForComparedCommit
+              -  codecommit:DeleteFile
+              -  codecommit:GitPush
+              -  codecommit:AssociateApprovalRuleTemplateWithRepository
+              -  codecommit:UpdateApprovalRuleTemplateDescription
+              -  codecommit:DeleteBranch
+            Resource: '*'
+      Groups:
+        - "CodeCommitDenyGrp"
+
+  ScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Runs Security Remediation Lambda on a Schedule"
+      ScheduleExpression: !Ref LambdaRate
+      State: ENABLED
+      Targets: 
+        - 
+          Arn: !Sub ${SecurityRemediationLambda.Arn}
+          Id: ScheduledRule
